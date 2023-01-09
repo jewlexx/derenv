@@ -4,6 +4,3 @@ use derenv::dotenv;
 pub struct ProjectEnv;
 
 pub struct LocalEnv;
-
-#[dotenv]
-fn pp() {}
