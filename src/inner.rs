@@ -1,9 +1,13 @@
-use std::path::PathBuf;
+use std::{
+    fs::File,
+    io::{self, Read},
+    path::{Path, PathBuf},
+};
 
 use proc_macro2::{Span, TokenStream};
-use proc_macro_error::{abort, abort_call_site, emit_call_site_error, emit_error};
-use quote::{quote, ToTokens};
-use syn::{spanned::Spanned, AttributeArgs, Data, DeriveInput, Lit, Meta, NestedMeta};
+use proc_macro_error::{abort_call_site, emit_error};
+use quote::quote;
+use syn::{parse::Parser, spanned::Spanned, AttributeArgs, Data, DeriveInput, Lit, NestedMeta};
 
 #[allow(unused_variables)]
 fn get_base_path(ast_span: Span) -> PathBuf {
@@ -20,38 +24,79 @@ fn get_base_path(ast_span: Span) -> PathBuf {
     }
 }
 
+fn create_field(env_name: &str) -> syn::Field {
+    let named_field: TokenStream = env_name.parse().unwrap();
+
+    syn::Field::parse_named
+        .parse2(quote! { pub #named_field: &str })
+        .unwrap()
+}
+
+fn parse_file(path: &Path) -> io::Result<Vec<(String, String)>> {
+    let mut file = File::open(path)?;
+
+    let mut file_contents = String::new();
+    file.read_to_string(&mut file_contents)?;
+
+    let assignments = file_contents
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+
+            if line.starts_with('#') || line.is_empty() {
+                return None;
+            }
+
+            let mut parts = line.splitn(2, '=');
+
+            let name = parts.next().unwrap().trim().to_string();
+            let value = parts.next().unwrap_or_default().trim().to_string();
+
+            Some((name, value))
+        })
+        .collect();
+
+    Ok(assignments)
+}
+
 pub(crate) fn dotenv(input_args: AttributeArgs, mut ast: DeriveInput) -> TokenStream {
     let mut path = get_base_path(ast.span());
 
     let mut suffix_path: String = ".env".to_string();
-    let mut is_public: bool = false;
 
     for arg in input_args {
-        if let NestedMeta::Meta(Meta::NameValue(assignment)) = arg {
-            if assignment.path.is_ident("path") {
-                if let Lit::Str(literal) = assignment.lit {
-                    suffix_path = literal.value();
-                } else {
-                    emit_error!(assignment.lit.span(), "expected string literal");
-                }
-            } else if assignment.path.is_ident("is_public") {
-                if let Lit::Bool(literal) = assignment.lit {
-                    is_public = literal.value();
-                } else {
-                    emit_error!(assignment.lit.span(), "expected boolean literal");
-                }
-            }
+        if let NestedMeta::Lit(Lit::Str(literal)) = arg {
+            suffix_path = literal.value();
+        } else {
+            emit_error!(arg.span(), "expected string literal for path");
         }
     }
 
     path.push(suffix_path);
 
-    match ast.data {
-        Data::Struct(ref mut struct_data) => {}
+    let assignments = match parse_file(&path) {
+        Ok(assignments) => assignments,
+        Err(_) => abort_call_site!("failed to parse file at path: {}", path.display()),
+    };
+
+    match &mut ast.data {
+        Data::Struct(ref mut struct_data) => {
+            if let syn::Fields::Named(fields) = &mut struct_data.fields {
+                for (name, _) in &assignments {
+                    fields.named.push(create_field(name));
+                }
+            } else {
+                let ident = ast.ident;
+                abort_call_site!(
+                    "expected named struct fields. declare struct as \"struct {} {{}}\"",
+                    ident
+                )
+            }
+        }
         _ => abort_call_site!("expected struct"),
     };
 
     quote! {
-        // const STRUCT_TOKENS: &str = #tokens_str;
+        #ast
     }
 }
