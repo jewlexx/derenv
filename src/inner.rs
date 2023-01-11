@@ -96,7 +96,28 @@ pub(crate) fn dotenv(input_args: AttributeArgs, mut ast: DeriveInput) -> TokenSt
         _ => abort_call_site!("expected struct"),
     };
 
+    let ident = &ast.ident;
+    let vis = &ast.vis;
+
+    let (names, values): (Vec<_>, Vec<_>) = assignments
+        .into_iter()
+        .map(|(name, value)| {
+            let name_tokens: TokenStream = name.parse().unwrap();
+            let value_tokens: TokenStream = value.parse().unwrap();
+
+            (name_tokens, value_tokens)
+        })
+        .unzip();
+
     quote! {
         #ast
+
+        impl #ident {
+            #vis const fn grab() -> Self {
+                Self {
+                    #(#names: #values),*
+                }
+            }
+        }
     }
 }
