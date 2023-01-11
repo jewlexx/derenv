@@ -28,7 +28,7 @@ fn create_field(env_name: &str) -> syn::Field {
     let named_field: TokenStream = env_name.parse().unwrap();
 
     syn::Field::parse_named
-        .parse2(quote! { pub #named_field: &str })
+        .parse2(quote! { pub #named_field: &'static str })
         .unwrap()
 }
 
